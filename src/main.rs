@@ -29,47 +29,44 @@ pub fn select(
     timeout: Option<Duration>,
 ) -> io::Result<(HashSet<RawFd>, HashSet<RawFd>, HashSet<RawFd>)> {
     unsafe {
-        let tv = match timeout {
-            Some(timeout) => &mut {
-                let mut tv: libc::timeval = mem::zeroed();
-                tv.tv_sec = timeout.as_secs() as i64;
-                tv.tv_usec = timeout.subsec_micros() as i64;
-                tv
-            },
-            None => ptr::null_mut(),
-        };
-        let rfds = match readfds.is_empty() {
-            true => ptr::null_mut(),
-            false => &mut {
+        let mut tv = timeout.map(|timeout| {
+            let mut tv: libc::timeval = mem::zeroed();
+            tv.tv_sec = timeout.as_secs() as i64;
+            tv.tv_usec = timeout.subsec_micros() as i64;
+            tv
+        });
+        let mut rfds = match readfds.is_empty() {
+            true => None,
+            false => {
                 let mut rfds: mem::MaybeUninit<libc::fd_set> = mem::MaybeUninit::uninit();
                 libc::FD_ZERO(rfds.as_mut_ptr());
                 for fd in readfds.iter() {
                     libc::FD_SET(fd.as_raw_fd(), rfds.as_mut_ptr());
                 }
-                rfds.assume_init()
-            },
+                Some(rfds.assume_init())
+            }
         };
-        let wfds = match writefds.is_empty() {
-            true => ptr::null_mut(),
-            false => &mut {
+        let mut wfds = match writefds.is_empty() {
+            true => None,
+            false => {
                 let mut wfds: mem::MaybeUninit<libc::fd_set> = mem::MaybeUninit::uninit();
                 libc::FD_ZERO(wfds.as_mut_ptr());
                 for fd in writefds.iter() {
                     libc::FD_SET(fd.as_raw_fd(), wfds.as_mut_ptr());
                 }
-                wfds.assume_init()
-            },
+                Some(wfds.assume_init())
+            }
         };
-        let efds = match errorfds.is_empty() {
-            true => ptr::null_mut(),
-            false => &mut {
+        let mut efds = match errorfds.is_empty() {
+            true => None,
+            false => {
                 let mut efds: mem::MaybeUninit<libc::fd_set> = mem::MaybeUninit::uninit();
                 libc::FD_ZERO(efds.as_mut_ptr());
                 for fd in errorfds.iter().cloned() {
                     libc::FD_SET(fd, efds.as_mut_ptr());
                 }
-                efds.assume_init()
-            },
+                Some(efds.assume_init())
+            }
         };
         let nfds = readfds
             .iter()
@@ -77,7 +74,11 @@ pub fn select(
             .chain(errorfds.iter())
             .max()
             .map_or(0, |max| max + 1);
-        if 0 > libc::select(nfds, rfds.clone(), wfds, efds, tv) {
+        let tv = tv.as_mut().map_or_else(ptr::null_mut, |v| v);
+        let rfds = rfds.as_mut().map_or_else(ptr::null_mut, |v| v);
+        let wfds = wfds.as_mut().map_or_else(ptr::null_mut, |v| v);
+        let efds = efds.as_mut().map_or_else(ptr::null_mut, |v| v);
+        if 0 > libc::select(nfds, rfds, wfds, efds, tv) {
             return Err(io::Error::last_os_error());
         }
         if !rfds.is_null() {
